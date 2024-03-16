@@ -34,13 +34,15 @@ namespace TinyReact {
   interface FiberBase {
     props: Props;
     dom: DomType | null;
-    parent?: Fiber;
-    child?: Fiber;
-    sibling?: Fiber;
+    parent?: Fiber | null;
+    child?: Fiber | null;
+    sibling?: Fiber | null;
+    alernate?: Fiber | null;
+    effectTag?: "UPDATE" | "PLACEMENT" | "DELETION";
   }
 
   interface NoTypeFiber extends FiberBase {
-    type: undefined;
+    type?: undefined;
   }
 
   interface CommonFiber extends FiberBase {
@@ -79,8 +81,6 @@ namespace TinyReact {
     };
   }
 
-  const isProperty = (key: string) => key !== "children";
-
   type DomType = (HTMLElement | Text) & { [index: string]: any };
 
   function createDom(fiber: CommonFiber) {
@@ -89,15 +89,45 @@ namespace TinyReact {
         ? document.createTextNode("")
         : document.createElement(fiber.type);
 
-    Object.keys(fiber.props)
-      .filter(isProperty)
-      .forEach((name) => (dom[name] = fiber.props[name]));
+    updateDom(dom, { children: [] }, fiber.props);
 
     return dom;
   }
+  const isEvent = (key: string) => key.startsWith("on");
+  const isProperty = (key: string) => key !== "children" && !isEvent(key);
+  const isNew = (prev: Props, next: Props) => (key: string) =>
+    prev[key] !== next[key];
+  const isGone = (prev: Props, next: Props) => (key: string) => !(key in next);
+  function updateDom(dom: DomType, prevProps: Props, nextProps: Props) {
+    Object.keys(prevProps)
+      .filter(isEvent)
+      .filter((key) => !(key in nextProps) || isNew(prevProps, nextProps)(key))
+      .forEach((name) => {
+        const eventType = name.toLocaleUpperCase().substring(2);
+        dom.removeEventListener(eventType, prevProps[name]);
+      });
+    Object.keys(prevProps)
+      .filter(isProperty)
+      .filter(isGone(prevProps, nextProps))
+      .forEach((name) => (dom[name] = undefined));
+
+    Object.keys(nextProps)
+      .filter(isProperty)
+      .filter(isNew(prevProps, nextProps))
+      .forEach((name) => (dom[name] = nextProps[name]));
+    Object.keys(nextProps)
+      .filter(isEvent)
+      .filter(isNew(prevProps, nextProps))
+      .forEach((name) => {
+        const eventType = name.toLocaleLowerCase().substring(2);
+        dom.addEventListener(eventType, nextProps[name]);
+      });
+  }
 
   function commitRoot() {
+    deletions!.forEach(commitWork);
     commitWork(wipRoot?.child || null);
+    currentRoot = wipRoot;
     wipRoot = null;
   }
 
@@ -106,7 +136,14 @@ namespace TinyReact {
       return;
     }
     const domParent = fiber.parent?.dom;
-    fiber.dom && domParent?.appendChild(fiber.dom);
+    if (fiber.effectTag === "PLACEMENT" && fiber.dom) {
+      domParent?.appendChild(fiber.dom);
+    } else if (fiber.effectTag === "UPDATE" && fiber.dom) {
+      updateDom(fiber.dom, fiber.alernate!.props, fiber.props);
+    } else if (fiber.effectTag === "DELETION" && fiber.dom) {
+      domParent?.removeChild(fiber.dom);
+    }
+
     commitWork(fiber.child || null);
     commitWork(fiber.sibling || null);
   }
@@ -125,13 +162,16 @@ namespace TinyReact {
         children: [element],
       },
       type: undefined,
+      alernate: currentRoot,
     };
-
+    deletions = [];
     nextUnitOfWork = wipRoot;
   }
 
   let nextUnitOfWork: Fiber | null = null;
   let wipRoot: Fiber | null = null;
+  let currentRoot: Fiber | null = null;
+  let deletions: Fiber[] | null = null;
 
   function workLoop(deadline: IdleDeadline) {
     let shouldYield = false;
@@ -155,28 +195,7 @@ namespace TinyReact {
     }
 
     const elements = fiber.props.children;
-    let index = 0;
-    let prevSlibing: Fiber | null = null;
-
-    while (index < elements.length) {
-      const element = elements[index];
-
-      const newFiber: Fiber = {
-        type: element.type,
-        props: element.props,
-        parent: fiber,
-        dom: null,
-      };
-
-      if (index === 0) {
-        fiber.child = newFiber;
-      } else {
-        prevSlibing!.sibling = newFiber;
-      }
-
-      prevSlibing = newFiber;
-      index++;
-    }
+    reconcileChildren(fiber, elements);
 
     if (fiber.child) {
       return fiber.child;
@@ -190,6 +209,55 @@ namespace TinyReact {
     }
 
     return null;
+  }
+
+  function reconcileChildren(wipFiber: Fiber, elements: TinyReactElement[]) {
+    let index = 0;
+    let oldFiber = wipFiber.alernate?.child || null;
+    let prevSlibing: Fiber | null = null;
+
+    while (index < elements.length || oldFiber != null) {
+      const element = elements[index];
+      let newFiber: Fiber | null = null;
+
+      const sameType = oldFiber && element && element.type === oldFiber.type;
+
+      if (sameType) {
+        newFiber = {
+          type: oldFiber!.type,
+          props: element.props,
+          dom: oldFiber!.dom,
+          parent: wipFiber,
+          alernate: oldFiber!,
+          effectTag: "UPDATE",
+        };
+      } else if (element) {
+        newFiber = {
+          type: element.type,
+          props: element.props,
+          dom: null,
+          parent: wipFiber,
+          alernate: null,
+          effectTag: "PLACEMENT",
+        };
+      } else if (oldFiber) {
+        oldFiber.effectTag = "DELETION";
+        deletions!.push(oldFiber);
+      }
+
+      if (oldFiber) {
+        oldFiber = oldFiber.sibling || null;
+      }
+
+      if (index === 0) {
+        wipFiber.child = newFiber;
+      } else {
+        prevSlibing!.sibling = newFiber;
+      }
+
+      prevSlibing = newFiber;
+      index++;
+    }
   }
 }
 
