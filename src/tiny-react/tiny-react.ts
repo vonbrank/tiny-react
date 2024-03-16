@@ -31,6 +31,11 @@ namespace TinyReact {
     };
   }
 
+  interface Hook<T> {
+    state: T;
+    queue: ((currentValue: T) => T)[];
+  }
+
   interface FiberBase {
     props: Props;
     dom: DomType | null;
@@ -39,6 +44,7 @@ namespace TinyReact {
     sibling?: Fiber | null;
     alernate?: Fiber | null;
     effectTag?: "UPDATE" | "PLACEMENT" | "DELETION";
+    hooks?: Hook<any>[];
   }
 
   interface RootFiber extends FiberBase {
@@ -222,9 +228,48 @@ namespace TinyReact {
     return null;
   }
 
+  let wipFiber: Fiber | null = null;
+  let hookIndex: number | null = null;
+
   function updateFunctionComponent(fiber: FunctionComponentFiber) {
+    wipFiber = fiber;
+    hookIndex = 0;
+    wipFiber.hooks = [];
     const children = [fiber.type(fiber.props)];
     reconcileChildren(fiber, children);
+  }
+
+  export function useState<T>(
+    intialValue: T
+  ): [T, (action: (currentValue: T) => T) => void] {
+    const oldHook: Hook<T> | null =
+      wipFiber?.alernate?.hooks?.[hookIndex!] || null;
+    const hook: Hook<T> = {
+      state: oldHook ? oldHook.state : intialValue,
+      queue: [],
+    };
+
+    const actions = oldHook?.queue || [];
+    actions.forEach((action) => {
+      hook.state = action(hook.state);
+    });
+
+    const setState = (action: (currentValue: T) => T) => {
+      hook.queue.push(action);
+      currentRoot &&
+        (wipRoot = {
+          dom: currentRoot.dom,
+          props: currentRoot.props,
+          alernate: currentRoot,
+          type: undefined,
+        });
+      nextUnitOfWork = wipRoot;
+      deletions = [];
+    };
+
+    wipFiber?.hooks?.push(hook);
+    hookIndex!++;
+    return [hook.state, setState];
   }
 
   function updateHostComponent(fiber: HostComponentFiber | RootFiber) {
