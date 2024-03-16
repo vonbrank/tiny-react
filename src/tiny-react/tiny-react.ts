@@ -96,6 +96,21 @@ namespace TinyReact {
     return dom;
   }
 
+  function commitRoot() {
+    commitWork(wipRoot?.child || null);
+    wipRoot = null;
+  }
+
+  function commitWork(fiber: Fiber | null) {
+    if (!fiber) {
+      return;
+    }
+    const domParent = fiber.parent?.dom;
+    fiber.dom && domParent?.appendChild(fiber.dom);
+    commitWork(fiber.child || null);
+    commitWork(fiber.sibling || null);
+  }
+
   export function render(
     element: TinyReactElement,
     container: HTMLElement | Text | null
@@ -125,8 +140,7 @@ namespace TinyReact {
       shouldYield = deadline.timeRemaining() < 1;
     }
     if (!nextUnitOfWork && wipRoot) {
-      console.log("wipRoot = ", wipRoot);
-      wipRoot = null;
+      commitRoot();
     }
     requestIdleCallback(workLoop);
   }
@@ -135,48 +149,44 @@ namespace TinyReact {
 
   function performUnitOfWork(fiber: Fiber): Fiber | null {
     if (typeof fiber.type === "string") {
-      fiber.dom = createDom(fiber);
+      if (!fiber.dom) {
+        fiber.dom = createDom(fiber);
+      }
+    }
 
-      if (fiber.parent) {
-        fiber.parent.dom?.appendChild(fiber.dom);
+    const elements = fiber.props.children;
+    let index = 0;
+    let prevSlibing: Fiber | null = null;
+
+    while (index < elements.length) {
+      const element = elements[index];
+
+      const newFiber: Fiber = {
+        type: element.type,
+        props: element.props,
+        parent: fiber,
+        dom: null,
+      };
+
+      if (index === 0) {
+        fiber.child = newFiber;
+      } else {
+        prevSlibing!.sibling = newFiber;
       }
 
-      const elements = fiber.props.children;
-      let index = 0;
-      let prevSlibing: Fiber | null = null;
+      prevSlibing = newFiber;
+      index++;
+    }
 
-      while (index < elements.length) {
-        const element = elements[index];
-
-        const newFiber: Fiber = {
-          type: element.type,
-          props: element.props,
-          parent: fiber,
-          dom: null,
-        };
-
-        if (index === 0) {
-          fiber.child = newFiber;
-        } else {
-          prevSlibing!.sibling = newFiber;
-        }
-
-        prevSlibing = newFiber;
-        index++;
+    if (fiber.child) {
+      return fiber.child;
+    }
+    let nextFiber: Fiber | null = fiber;
+    while (nextFiber) {
+      if (nextFiber.sibling) {
+        return nextFiber.sibling;
       }
-
-      if (fiber.child) {
-        return fiber.child;
-      }
-      let nextFiber: Fiber | null = fiber;
-      while (nextFiber) {
-        if (nextFiber.sibling) {
-          return nextFiber.sibling;
-        }
-        nextFiber = nextFiber.parent || null;
-      }
-
-      return null;
+      nextFiber = nextFiber.parent || null;
     }
 
     return null;
