@@ -41,11 +41,11 @@ namespace TinyReact {
     effectTag?: "UPDATE" | "PLACEMENT" | "DELETION";
   }
 
-  interface NoTypeFiber extends FiberBase {
-    type?: undefined;
+  interface RootFiber extends FiberBase {
+    type: undefined;
   }
 
-  interface CommonFiber extends FiberBase {
+  interface HostComponentFiber extends FiberBase {
     type: string;
   }
 
@@ -53,7 +53,7 @@ namespace TinyReact {
     type: FunctionComponentElementType<any>;
   }
 
-  type Fiber = NoTypeFiber | CommonFiber | FunctionComponentFiber;
+  type Fiber = RootFiber | HostComponentFiber | FunctionComponentFiber;
 
   export function createElement(
     type: ElementType,
@@ -83,7 +83,7 @@ namespace TinyReact {
 
   type DomType = (HTMLElement | Text) & { [index: string]: any };
 
-  function createDom(fiber: CommonFiber) {
+  function createDom(fiber: HostComponentFiber) {
     const dom: DomType =
       fiber.type === "_TEXT_ELEMENT_"
         ? document.createTextNode("")
@@ -135,17 +135,31 @@ namespace TinyReact {
     if (!fiber) {
       return;
     }
-    const domParent = fiber.parent?.dom;
+
+    let domParentFiber = fiber.parent;
+    while (domParentFiber && !domParentFiber.dom) {
+      domParentFiber = domParentFiber.parent;
+    }
+    const domParent = domParentFiber?.dom || null;
+
     if (fiber.effectTag === "PLACEMENT" && fiber.dom) {
       domParent?.appendChild(fiber.dom);
     } else if (fiber.effectTag === "UPDATE" && fiber.dom) {
       updateDom(fiber.dom, fiber.alernate!.props, fiber.props);
     } else if (fiber.effectTag === "DELETION" && fiber.dom) {
-      domParent?.removeChild(fiber.dom);
+      commitDeletion(fiber, domParent!);
     }
 
     commitWork(fiber.child || null);
     commitWork(fiber.sibling || null);
+  }
+
+  function commitDeletion(fiber: Fiber, domParent: DomType) {
+    if (fiber.dom) {
+      domParent.removeChild(fiber.dom);
+    } else {
+      commitDeletion(fiber.child!, domParent);
+    }
   }
 
   export function render(
@@ -188,14 +202,11 @@ namespace TinyReact {
   requestIdleCallback(workLoop);
 
   function performUnitOfWork(fiber: Fiber): Fiber | null {
-    if (typeof fiber.type === "string") {
-      if (!fiber.dom) {
-        fiber.dom = createDom(fiber);
-      }
+    if (typeof fiber.type === "string" || fiber.type === undefined) {
+      updateHostComponent(fiber);
+    } else {
+      updateFunctionComponent(fiber);
     }
-
-    const elements = fiber.props.children;
-    reconcileChildren(fiber, elements);
 
     if (fiber.child) {
       return fiber.child;
@@ -209,6 +220,19 @@ namespace TinyReact {
     }
 
     return null;
+  }
+
+  function updateFunctionComponent(fiber: FunctionComponentFiber) {
+    const children = [fiber.type(fiber.props)];
+    reconcileChildren(fiber, children);
+  }
+
+  function updateHostComponent(fiber: HostComponentFiber | RootFiber) {
+    if (!fiber.dom && fiber.type) {
+      fiber.dom = createDom(fiber);
+    }
+    const elements = fiber.props.children;
+    reconcileChildren(fiber, elements);
   }
 
   function reconcileChildren(wipFiber: Fiber, elements: TinyReactElement[]) {
