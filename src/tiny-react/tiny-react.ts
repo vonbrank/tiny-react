@@ -134,6 +134,7 @@ namespace TinyReact {
     deletions!.forEach(commitWork);
     commitWork(wipRoot?.child || null);
     currentRoot = wipRoot;
+    console.log("current root = ", currentRoot);
     wipRoot = null;
   }
 
